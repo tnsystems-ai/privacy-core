@@ -1,0 +1,17 @@
+[package]
+name = "privacy-core-py"
+version = "0.1.0"
+description = "Python bindings for privacy-core-engine"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_privacy_core"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+privacy-core-engine = { path = "../privacy-core-engine" }
+pyo3 = "0.30"

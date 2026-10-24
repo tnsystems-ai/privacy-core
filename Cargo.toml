@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/privacy-core-engine"]
+members = ["crates/privacy-core-engine", "crates/privacy-core-py"]
 
 [workspace.package]
 edition = "2024"

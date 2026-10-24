@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "privacy-core"
+description = "Ultra-fast, deterministic PII detection and redaction engine built in Rust"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.13"
+dynamic = ["version"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.maturin]
+manifest-path = "crates/privacy-core-py/Cargo.toml"
+python-source = "python"
+module-name = "privacy_core._privacy_core"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
