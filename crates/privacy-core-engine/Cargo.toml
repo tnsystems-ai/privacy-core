@@ -1,0 +1,13 @@
+[package]
+name = "privacy-core-engine"
+version = "0.1.0"
+description = "Deterministic, low-latency PII detection and redaction engine"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "privacy_core_engine"
+path = "src/lib.rs"
+
+[dependencies]
