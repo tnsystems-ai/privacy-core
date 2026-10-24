@@ -33,3 +33,9 @@ redacted_text = engine.redact(text)
 print(redacted_text)
 # Output: "Please transfer funds to IBAN [IBAN_REDACTED] for [PERSON_REDACTED]."
 ```
+
+---
+
+## Support & Contact
+- **Email:** info@tnsystems.ai
+- **Issues:** [GitHub Issues](https://github.com/tnsystems-ai/privacy-core/issues)
