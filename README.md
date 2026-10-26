@@ -14,8 +14,8 @@ Use it to strip bank details from free text before the text is logged, stored or
 
 | Type | Default tag | Rules |
 |---|---|---|
-| `IBAN` | `[IBAN_REDACTED]` | 50 European country codes, each with its registry length; compact or grouped by single spaces; uppercase; check digits 02–98 and mod-97 |
-| `CREDIT_CARD` | `[CREDIT_CARD_REDACTED]` | 13–19 digits; compact or grouped with one consistent separator (space or hyphen); Luhn; numbers made of one repeated digit are rejected |
+| `IBAN` | `[IBAN_REDACTED]` | 50 European country codes, each with its registry length; any letter case; compact or grouped by single spaces, including no-break spaces (U+00A0, U+202F) common in French text; check digits 02–98 and mod-97 |
+| `CREDIT_CARD` | `[CREDIT_CARD_REDACTED]` | 13–19 digits; compact or grouped with one separator kind (spaces, including no-break spaces, or hyphens); Luhn; numbers made of one repeated digit are rejected |
 
 A match must start and end at a word boundary: an ASCII letter or digit right before or after it blocks the match.
 
@@ -84,8 +84,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Input size | p50 | p99 |
 |---|---|---|
 | 263 bytes | 0.5 µs | 0.6–1.0 µs |
-| 2 KB | 2.9–3.0 µs | 3.7–7.2 µs |
-| 20 KB | 27–30 µs | 45–160 µs |
+| 2 KB | 2.9–3.4 µs | 3.4–7.2 µs |
+| 20 KB | 27–31 µs | 32–160 µs |
 | 1 MB (just under the default input limit) | 1.3–1.4 ms | 1.4–1.8 ms |
 
 Throughput was 440–770 MB/s. Through the Python binding, p50 on the 263-byte text was about 0.1 µs higher.
@@ -95,7 +95,7 @@ Reproduce with `cargo run --release -p privacy-core-engine --example latency`. N
 ## Limitations
 
 - Only IBANs and payment card numbers. Names, addresses, emails, phone numbers, national IDs (such as the French NIR) and company IDs are not detected.
-- IBANs are found only in uppercase, with plain ASCII spaces between groups. Lowercase IBANs, and IBANs grouped with non-breaking spaces (common in French documents) or hyphens, are missed.
+- IBANs grouped with hyphens or dots are missed.
 - IBANs outside the 50 supported European country codes are not detected.
 - There is no card-network (IIN) check: any Luhn-valid number of 13–19 digits is tagged `CREDIT_CARD`. French SIRET numbers (14 digits, Luhn-valid by design) and IMEI numbers (15 digits) are tagged as cards.
 - A missed entity is a leak. Test recall on your own data before you rely on it.
@@ -105,7 +105,7 @@ Reproduce with `cargo run --release -p privacy-core-engine --example latency`. N
 
 Planned, no dates:
 
-- lowercase IBANs and IBANs with non-breaking spaces; card-network check;
+- card-network (IIN) check;
 - French identifiers: NIR, RIB, SIREN and SIRET, BIC;
 - an optional local model for names and addresses;
 - wheels for older Python versions, CI, PyPI and crates.io releases.

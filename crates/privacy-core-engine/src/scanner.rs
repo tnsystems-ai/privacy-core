@@ -8,7 +8,8 @@ pub(crate) struct ScanOutput {
 
 /// Single forward pass over `text`. Candidates are only attempted at word
 /// boundaries; every candidate probe reads a bounded number of bytes, so the
-/// scan is O(n). All matched spans are pure ASCII.
+/// scan is O(n). Matched spans are ASCII except for no-break spaces between
+/// groups.
 pub(crate) fn scan(text: &str, enabled: &[bool; PiiType::COUNT]) -> ScanOutput {
     let bytes = text.as_bytes();
     let scan_iban = enabled[PiiType::Iban.index()];
@@ -22,7 +23,7 @@ pub(crate) fn scan(text: &str, enabled: &[bool; PiiType::COUNT]) -> ScanOutput {
     while i < bytes.len() {
         let b = bytes[i];
         if !prev_alnum {
-            let hit = if scan_iban && b.is_ascii_uppercase() {
+            let hit = if scan_iban && b.is_ascii_alphabetic() {
                 match_iban(bytes, i).map(|end| (PiiType::Iban, end))
             } else if scan_pan && b.is_ascii_digit() {
                 match_pan(bytes, i).map(|end| (PiiType::CreditCard, end))
@@ -35,7 +36,7 @@ pub(crate) fn scan(text: &str, enabled: &[bool; PiiType::COUNT]) -> ScanOutput {
                     start: i,
                     end,
                 });
-                chars += end - i;
+                chars += count_chars(&bytes[i..end]);
                 i = end;
                 prev_alnum = true;
                 continue;
@@ -50,27 +51,47 @@ pub(crate) fn scan(text: &str, enabled: &[bool; PiiType::COUNT]) -> ScanOutput {
 }
 
 #[inline]
+fn count_chars(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|&&b| b & 0xC0 != 0x80).count()
+}
+
+#[inline]
 fn is_boundary_at(bytes: &[u8], pos: usize) -> bool {
     bytes.get(pos).is_none_or(|b| !b.is_ascii_alphanumeric())
 }
 
 #[inline]
 fn is_iban_char(b: u8) -> bool {
-    b.is_ascii_uppercase() || b.is_ascii_digit()
+    b.is_ascii_alphanumeric()
 }
 
-/// Matches an IBAN starting at `start`, allowing single spaces between
-/// groups. Returns the exclusive end offset in `bytes`.
+/// Byte length of a space-like group separator at `pos`: an ASCII space, a
+/// no-break space (U+00A0) or a narrow no-break space (U+202F). French text
+/// often groups IBANs and card numbers with the last two.
+#[inline]
+fn space_len(bytes: &[u8], pos: usize) -> Option<usize> {
+    match bytes.get(pos..)? {
+        [b' ', ..] => Some(1),
+        [0xC2, 0xA0, ..] => Some(2),
+        [0xE2, 0x80, 0xAF, ..] => Some(3),
+        _ => None,
+    }
+}
+
+/// Matches an IBAN starting at `start`, in any letter case, allowing one
+/// space-like separator between groups. Returns the exclusive end offset in
+/// `bytes`.
 fn match_iban(bytes: &[u8], start: usize) -> Option<usize> {
     let head = bytes.get(start..start + 4)?;
-    if !head[0].is_ascii_uppercase()
-        || !head[1].is_ascii_uppercase()
+    if !head[0].is_ascii_alphabetic()
+        || !head[1].is_ascii_alphabetic()
         || !head[2].is_ascii_digit()
         || !head[3].is_ascii_digit()
     {
         return None;
     }
-    let expected = iban::country_length([head[0], head[1]])?;
+    let expected =
+        iban::country_length([head[0].to_ascii_uppercase(), head[1].to_ascii_uppercase()])?;
 
     let mut buf = [0u8; iban::MAX_LEN];
     let mut len = 0usize;
@@ -78,53 +99,69 @@ fn match_iban(bytes: &[u8], start: usize) -> Option<usize> {
     while len < expected {
         let b = *bytes.get(pos)?;
         if is_iban_char(b) {
-            buf[len] = b;
+            buf[len] = b.to_ascii_uppercase();
             len += 1;
             pos += 1;
-        } else if b == b' ' && len > 0 && bytes.get(pos + 1).is_some_and(|&n| is_iban_char(n)) {
-            pos += 1;
         } else {
-            return None;
+            // A separator must sit between two groups; anything else ends the candidate.
+            pos += space_len(bytes, pos)
+                .filter(|&n| len > 0 && bytes.get(pos + n).is_some_and(|&c| is_iban_char(c)))?;
         }
     }
 
     (is_boundary_at(bytes, pos) && iban::validate(&buf[..len])).then_some(pos)
 }
 
-/// Matches a PAN starting at `start`, allowing a single consistent separator
-/// (space or hyphen) between digit groups. Group-aligned prefixes are tried
-/// longest first so trailing digit groups do not mask a valid PAN.
+/// Separator class between card digit groups.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanSep {
+    Space,
+    Hyphen,
+}
+
+#[inline]
+fn pan_sep(bytes: &[u8], pos: usize) -> Option<(PanSep, usize)> {
+    if bytes.get(pos) == Some(&b'-') {
+        return Some((PanSep::Hyphen, 1));
+    }
+    space_len(bytes, pos).map(|n| (PanSep::Space, n))
+}
+
+/// Matches a PAN starting at `start`, allowing one consistent separator class
+/// (space-like or hyphen) between digit groups. Group-aligned prefixes are
+/// tried longest first so trailing digit groups do not mask a valid PAN.
 fn match_pan(bytes: &[u8], start: usize) -> Option<usize> {
     let mut buf = [0u8; luhn::MAX_LEN];
     let mut len = 0usize;
     let mut pos = start;
-    let mut sep: Option<u8> = None;
+    let mut sep: Option<PanSep> = None;
     let mut ends = [(0usize, 0usize); luhn::MAX_LEN - luhn::MIN_LEN + 1];
     let mut n_ends = 0usize;
     let mut tail_ok = true;
 
     loop {
-        match bytes.get(pos).copied() {
-            Some(b) if b.is_ascii_digit() => {
-                if len == luhn::MAX_LEN {
-                    tail_ok = false;
-                    break;
-                }
-                buf[len] = b;
-                len += 1;
-                pos += 1;
+        if let Some(&b) = bytes.get(pos).filter(|b| b.is_ascii_digit()) {
+            if len == luhn::MAX_LEN {
+                tail_ok = false;
+                break;
             }
-            Some(b @ (b' ' | b'-'))
+            buf[len] = b;
+            len += 1;
+            pos += 1;
+            continue;
+        }
+        match pan_sep(bytes, pos) {
+            Some((s, n))
                 if len > 0
-                    && sep.is_none_or(|s| s == b)
-                    && bytes.get(pos + 1).is_some_and(u8::is_ascii_digit) =>
+                    && sep.is_none_or(|prev| prev == s)
+                    && bytes.get(pos + n).is_some_and(u8::is_ascii_digit) =>
             {
                 if len >= luhn::MIN_LEN {
                     ends[n_ends] = (len, pos);
                     n_ends += 1;
                 }
-                sep = Some(b);
-                pos += 1;
+                sep = Some(s);
+                pos += n;
             }
             _ => break,
         }
@@ -246,6 +283,56 @@ mod tests {
         assert_eq!(only_pan.detections.len(), 1);
         assert_eq!(only_pan.detections[0].pii_type, PiiType::CreditCard);
         assert!(scan(t, &[false, false]).detections.is_empty());
+    }
+
+    #[test]
+    fn finds_lowercase_and_mixed_case_iban() {
+        assert_eq!(
+            spans("iban fr76 3000 6000 0112 3456 7890 189."),
+            vec![(PiiType::Iban, "fr76 3000 6000 0112 3456 7890 189")]
+        );
+        assert_eq!(
+            spans("pay de89370400440532013000"),
+            vec![(PiiType::Iban, "de89370400440532013000")]
+        );
+        assert_eq!(
+            spans("Gb82West12345698765432"),
+            vec![(PiiType::Iban, "Gb82West12345698765432")]
+        );
+        assert!(spans("xde89370400440532013000").is_empty());
+        assert!(spans("de88370400440532013000").is_empty());
+    }
+
+    #[test]
+    fn finds_iban_grouped_with_no_break_spaces() {
+        let nbsp = "IBAN FR76\u{a0}3000\u{a0}6000\u{a0}0112\u{a0}3456\u{a0}7890\u{a0}189 ok";
+        assert_eq!(scan(nbsp, &ALL).chars, nbsp.chars().count());
+        assert_eq!(
+            spans(nbsp),
+            vec![(
+                PiiType::Iban,
+                "FR76\u{a0}3000\u{a0}6000\u{a0}0112\u{a0}3456\u{a0}7890\u{a0}189"
+            )]
+        );
+        let narrow = "FR76\u{202f}3000\u{202f}6000\u{202f}0112\u{202f}3456\u{202f}7890\u{202f}189";
+        assert_eq!(spans(narrow), vec![(PiiType::Iban, narrow)]);
+    }
+
+    #[test]
+    fn finds_pan_grouped_with_no_break_spaces() {
+        assert_eq!(
+            spans("carte 4111\u{a0}1111\u{a0}1111\u{a0}1111."),
+            vec![(PiiType::CreditCard, "4111\u{a0}1111\u{a0}1111\u{a0}1111")]
+        );
+        assert!(spans("4111-1111\u{a0}1111-1111").is_empty());
+    }
+
+    #[test]
+    fn trailing_no_break_space_is_not_part_of_match() {
+        assert_eq!(
+            spans("DE89370400440532013000\u{a0}merci"),
+            vec![(PiiType::Iban, "DE89370400440532013000")]
+        );
     }
 
     #[test]

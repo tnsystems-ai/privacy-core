@@ -46,6 +46,16 @@ def test_detect_returns_codepoint_offsets() -> None:
     assert [text[d["start"] : d["end"]] for d in detections] == [IBAN, CARD]
 
 
+def test_lowercase_and_no_break_space_iban() -> None:
+    engine = PIIEngine()
+    assert engine.redact("iban fr76 3000 6000 0112 3456 7890 189") == "iban [IBAN_REDACTED]"
+    grouped = "FR76 3000 6000 0112 3456 7890 189"
+    text = f"IBAN : {grouped}, merci"
+    detections = engine.detect(text)
+    assert [text[d["start"] : d["end"]] for d in detections] == [grouped]
+    assert engine.redact(text) == "IBAN : [IBAN_REDACTED], merci"
+
+
 def test_detect_ascii_offsets() -> None:
     detections = PIIEngine().detect(SAMPLE)
     assert detections[0] == {
